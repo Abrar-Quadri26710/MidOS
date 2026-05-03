@@ -1,108 +1,132 @@
 ﻿using System;
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace MID
 {
     public static class Loader
     {
-        public static void LoadProgram(string filename, MemoryManager memory, int startAddress)
+        public const int STACK_SIZE = 4096; // 4KB 
+        public const int GLOBAL_DATA_SIZE = 1024; // 1KB  
+        public const int HEAP_SIZE = 512;  
+
+        //REMINDER
+        // r11 = IP   (set to 0 — first instruction)
+        // r12 = PID  (current process id)
+        // r13 = SP   (stack pointer — top of stack)
+        // r14 = Global Memory Start address
+
+        private const int IP_REGISTER = 11;
+        private const int PID_REGISTER = 12;
+        private const int SP_REGISTER = 13;
+        private const int GLOBAL_REGISTER = 14;
+
+        //The logic behind LoadProgram is as follows
+        //1. Read the assembly file line by line, ignoring comments and blank lines
+        //2. Parse each instruction into its opcode and arguments, converting them to the appropriate binary format
+        //3. Write the binary instructions sequentially into the memory starting at the specified address
+        //4. After loading the code, calculate the memory layout for the process (code, stack, global data, heap) and set the corresponding fields in the PCB
+        //5. Initialize the process's registers according to the module 1 specification, ensuring that IP points to the correct start of the code in virtual memory
+        //6. Print a summary of the loaded program for verification
+    
+        public static void LoadProgram(string filename, MemoryManager memory, PCB pcb, int startAddress)
         {
             if (!File.Exists(filename))
-            {
-                throw new FileNotFoundException($"The file {filename} was not found.");
-            }
+                throw new FileNotFoundException($"[Loader] Program file not found: {filename}");
 
             string[] lines = File.ReadAllLines(filename);
             int currentAddress = startAddress;
+            int instructionCount = 0;
 
             foreach (string line in lines)
             {
-                // 1. Clean the line
-                // Remove comments (everything after ';') and whitespace
+                
                 string cleanLine = line.Split(';')[0].Trim();
                 if (string.IsNullOrEmpty(cleanLine)) continue;
 
-                // 2. Split into parts (OpCode Arg1, Arg2)
-                // We split by spaces and commas to handle "movi r1, #1"
-                string[] parts = cleanLine.Split(new char[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries);
-
+               
+                string[] parts = cleanLine.Split(new char[] { ' ', ',' },
+                                                 StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length == 0) continue;
 
-                // 3. Parse OpCode
-                string opCodeStr = parts[0];
-                Opcode opCode;
-
-                if (!Enum.TryParse(opCodeStr, true, out opCode)) // true = ignore case
+                if (!Enum.TryParse(parts[0], ignoreCase: true, out Opcode opCode))
                 {
-                    Console.WriteLine($"Error: Unknown opcode '{opCodeStr}'");
+                    Console.WriteLine($"[Loader] Unknown opcode '{parts[0]}' — skipping line.");
                     continue;
                 }
 
-                // 4. Parse Arguments (Default to 0 if missing)
                 int arg1 = (parts.Length > 1) ? ParseArgument(parts[1]) : 0;
                 int arg2 = (parts.Length > 2) ? ParseArgument(parts[2]) : 0;
 
-                // 5. Write to Memory (9 Bytes total)
-                // Byte 1: OpCode
+                // Write 9-byte instruction: 1 byte opcode + 4 bytes arg1 + 4 bytes arg2
                 memory.WriteByte(currentAddress, (byte)opCode);
-
-                // Bytes 2-5: Arg1
                 memory.WriteInt32(currentAddress + 1, arg1);
-
-                // Bytes 6-9: Arg2
                 memory.WriteInt32(currentAddress + 5, arg2);
 
-                // Advance address by 9 bytes
                 currentAddress += 9;
+                instructionCount++;
             }
 
 
+            //   [ Code ][ Stack ][ Global Data ][ Heap ]
 
+            int codeSize = instructionCount * 9;
+            int stackBase = startAddress + codeSize;
+            int stackTop = stackBase + STACK_SIZE;    // SP starts here (grows downward)
+            int globalBase = stackTop;
+            int heapBase = globalBase + GLOBAL_DATA_SIZE;
+            int heapEnd = heapBase + HEAP_SIZE;
+
+            pcb.CodeSize = codeSize;
+            pcb.StackSize = STACK_SIZE;
+            pcb.DataSize = GLOBAL_DATA_SIZE;
+            pcb.HeapStart = heapBase;
+            pcb.HeapEnd = heapEnd;
+            pcb.NextHeapAddress = heapBase;  // Heap bump pointer starts at the base
+            pcb.ProcessMemorySize = codeSize + STACK_SIZE + GLOBAL_DATA_SIZE + HEAP_SIZE;
+
+            // Zero out the global data region
+            for (int i = 0; i < GLOBAL_DATA_SIZE; i++)
+                memory.WriteByte(globalBase + i, 0);
+
+
+        
+            pcb.Registers[IP_REGISTER] = startAddress; // Try this to set IP to the start of the code in virtual memory
+
+            pcb.Registers[PID_REGISTER] = pcb.ProcessId;
+            pcb.Registers[SP_REGISTER] = stackTop;
+            pcb.Registers[GLOBAL_REGISTER] = globalBase;
+
+            Console.WriteLine($"[Loader] '{filename}' → Process {pcb.ProcessId} | " +
+                              $"{instructionCount} instructions | code@{startAddress} | " +
+                              $"stack top@{stackTop} | global@{globalBase} | heap@{heapBase}-{heapEnd}");
         }
 
+        // Argument parser
+        //How this works is it supports multiple formats for instructions
+        
         private static int ParseArgument(string arg)
         {
             arg = arg.Trim();
 
-            // Case 1: Register (e.g., "r1")
-            if (arg.StartsWith("r", StringComparison.OrdinalIgnoreCase) && char.IsDigit(arg[1]))
-            {
+            // Register: r1 … r14
+            if (arg.StartsWith("r", StringComparison.OrdinalIgnoreCase) &&
+                arg.Length > 1 && char.IsDigit(arg[1]))
                 return int.Parse(arg.Substring(1));
-            }
 
-            // Case 2: Numeric Constant (e.g., "#10")
+            // Numeric immediate: #10 meaning the literal value 10
             if (arg.StartsWith("#"))
-            {
                 return int.Parse(arg.Substring(1));
-            }
 
-            // Case 3: Character Constant (e.g., "@a")
-            if (arg.StartsWith("@"))
-            {
-                char c = arg[1];
-                return (int)c; // Return ASCII value
-            }
+            // Character immediate: @a  meaning ASCII value
+            if (arg.StartsWith("@") && arg.Length > 1)
+                return (int)arg[1];
 
-            // Case 4: Memory Address / Raw Number (e.g., "1234" or "-5")
-            // This handles negative numbers too if they don't have '#' prefix
-            int result;
-            if (int.TryParse(arg, out result))
-            {
+            // Raw integer memory address or undecorated constant, may be negative
+            if (int.TryParse(arg, out int result))
                 return result;
-            }
 
-            return 0; // Default fallback
-
-
-
-
+            Console.WriteLine($"[Loader] Could not parse argument '{arg}', defaulting to 0.");
+            return 0;
         }
     }
-    
 }

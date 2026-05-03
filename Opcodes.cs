@@ -1,13 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace MID
+﻿namespace MID
 {
-    //I had a [Cite Start} here
-    //Refer to module 1 for opcode meaninsg 
+    // Refer to module 1 for full opcode descriptions
     public enum Opcode : byte
     {
         INCR = 1,
@@ -48,7 +41,20 @@ namespace MID
         INPUT,
         INPUTC,
         SETPRIORITY,
-        SETPRIORITYL,
-    }
+        SETPRIORITYI,
+        MAPSHAREDMEM,
 
+        ACQUIRELOCK,
+        ACQUIRELOCKI,
+        RELEASELOCK,
+        RELEASELOCKI,
+
+        SIGNALEVENT,
+        SIGNALEVENTI,
+        WAITEVENT,
+        WAITEVENTI,
+
+        ALLOC,
+        FREEMEMORY
+    }
 }
