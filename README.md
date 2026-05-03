@@ -12,8 +12,6 @@ A fully functional virtual operating system and custom CPU simulator built in C#
 - [How to Run](#how-to-run)
 - [Writing Programs](#writing-programs)
 - [Instruction Set Reference](#instruction-set-reference)
-- [Module Breakdown](#module-breakdown)
-- [Test Programs](#test-programs)
 - [Project Structure](#project-structure)
 
 ---
@@ -282,77 +280,6 @@ new IP = (current IP + 9) + offset
 
 ---
 
-## Module Breakdown
-
-### Module 1 — CPU and Instruction Set
-The virtual CPU has 14 integer registers, a sign flag, a zero flag, and a stack pointer. Each instruction is exactly 9 bytes (1 opcode + 4 arg1 + 4 arg2). The fetch-decode-execute loop dispatches on a `switch` over the `Opcode` enum. Every instruction costs exactly one clock cycle.
-
-### Module 2 — Memory Paging
-Every memory access is translated through a page table. A 32-bit virtual address is split into a 24-bit page number (upper bits) and an 8-bit offset (lower bits). `ReadInt32` and `WriteInt32` operate byte-by-byte to correctly handle integers that straddle page boundaries.
-
-### Module 3 — Process Management
-Each process has a PCB storing its full register state, page table, priority (1–32), time quantum (default 10), and lifecycle counters. The scheduler uses a priority-descending LINQ query to select the next process. Context switches save and restore all 14 registers, both flags, and the page table.
-
-### Module 4 — Locks, Events, Shared Memory
-Ten OS-provided locks (integer array, 0=free or owning PID) and ten events (boolean array). A process that fails to acquire a held lock does not advance its IP — it will retry the same `AcquireLock` instruction when rescheduled. Priority inversion is handled by temporarily boosting the lock holder's priority to match the highest-priority waiter, tracked precisely via `PCB.WaitingOnLockId`.
-
-### Module 5 — Heap Allocation
-First-fit allocator within a 512-byte per-process heap region. Freed blocks are tracked in a `List<HeapBlock>` and reused before the heap pointer is bumped. Allocations that would exceed the heap boundary return 0 (failure).
-
-### Module 6 — Virtual Memory
-Virtual page table has 512 entries; physical RAM holds 256. Pages beyond physical RAM start as `IsValid = false`. Access to an invalid page triggers `HandlePageFault`, which selects the LRU valid page for eviction. Dirty pages are saved to a simulated disk (`Dictionary<int, byte[]>`) before eviction; clean pages are discarded without saving. The page fault count is routed to the active PCB via a delegate set in `CPU.LoadState`.
-
----
-
-## Test Programs
-
-The following test files are provided to verify each module:
-
-```bash
-dotnet run -- 65536 mod1_test.txt                       # CPU and instructions
-dotnet run -- 65536 mod2_test.txt                       # Paging
-dotnet run -- 65536 mod3a_test.txt mod3b_test.txt       # Process management
-dotnet run -- 65536 mod4a_test.txt mod4b_test.txt       # Locks and events
-dotnet run -- 65536 mod5_test.txt                       # Heap allocation
-dotnet run -- 65536 mod6_test.txt                       # Virtual memory
-```
-
-### Module 1 Expected Output
-```
-[P1] 15        (addr)
-[P1] 16        (incr)
-[P1] 8         (addi)
-[P1] 999       (movrm + movmr roundtrip)
-[P1] 999       (movmm roundtrip)
-A              (printcr)
-[P1] 10        (jlt skips correctly)
-[P1] 20        (jgt skips correctly)
-[P1] 30        (je skips correctly)
-PASSED
-[P1] 15        (loop exit)
-[P1] 42        (stack push/pop)
-[P1] 55        (subroutine - inside)
-[P1] 55        (subroutine - after return)
-```
-
-### Module 3 Expected Behavior
-- Process A (priority 20) runs exclusively until it sleeps
-- While A sleeps, Process B (priority 10) runs and idle process fills gaps
-- A wakes and completes; both exit reports print
-
-### Module 4 Expected Behavior
-- Critical sections from two processes never interleave
-- 999 only prints after the signaling process has run
-
-### Module 6 Expected Output
-```
-[MMU] PAGE FAULT! Swapping Virtual Page 300 into RAM...
-[P1] 0
-[P1] 54321
-```
-Exit report shows `Page Faults: 1` or more.
-
----
 
 ## Project Structure
 
@@ -369,15 +296,6 @@ MID/
 ├── Scheduler.cs          ← OS kernel, scheduling loop, priority inversion
 ├── PCB.cs                ← Process Control Block
 ├── ProcessState.cs       ← process lifecycle enum
-└── test/
-    ├── mod1_test.txt
-    ├── mod2_test.txt
-    ├── mod3a_test.txt
-    ├── mod3b_test.txt
-    ├── mod4a_test.txt
-    ├── mod4b_test.txt
-    ├── mod5_test.txt
-    └── mod6_test.txt
 ```
 
 ---
@@ -386,7 +304,7 @@ MID/
 
 **Fixed 9-byte instruction format** — Every instruction occupies exactly 9 bytes regardless of how many arguments it uses. This makes the fetch loop trivial and eliminates variable-length parsing at runtime.
 
-**Relative jumps from next instruction** — Jump offsets are relative to the instruction after the jump, matching the spec's convention. The formula is `new IP = (current IP + 9) + offset`.
+**Relative jumps from next instruction** — Jump offsets are relative to the instruction after the jump. The formula is `new IP = (current IP + 9) + offset`.
 
 **Byte-by-byte ReadInt32/WriteInt32** — Four-byte integers are assembled from individual byte reads rather than block copies. This correctly handles integers that straddle page boundaries without any special-case logic.
 
@@ -398,6 +316,4 @@ MID/
 
 ---
 
-## License
 
-This project was built as an academic assignment. Feel free to reference the design and implementation for educational purposes.
